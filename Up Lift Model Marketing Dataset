@@ -1,0 +1,119 @@
+# -*- coding: utf-8 -*-
+"""
+Created on Mon Jan 14 17:09:51 2022
+
+@author: Gage
+"""
+
+
+
+
+#######################################################################
+#######################################################################
+# Uplift modeling
+#######################################################################
+#######################################################################
+## Variable Description
+#######################################################################
+##
+## recency - Months since last purchase
+## history - $ value of the historical purchases
+## used_discount - indicates if the customer used a discount before
+## used_bogo - indicates if the customer used a buy one get one before
+## zip_code - class of the zip code as suburban/urban/rural
+## is_referral - indicates if the customer was acquired from referral channel
+## channel - channels that the customer using, phone/web/multichannel
+## offer - the offers sent to the customers, discount/BOGO/No offer
+## conversion - customer conversion (buy or not) ( 1 = buy , 0 = no buy)
+##
+###############################################################
+###############################################################
+
+
+import numpy as np 
+import pandas as pd 
+from sklearn.ensemble import GradientBoostingClassifier
+from sklearn.model_selection import train_test_split
+from yellowbrick.classifier import ROCAUC
+import plotly.graph_objects as go
+import plotly.express as px
+import matplotlib.pyplot as plt
+
+
+df = pd.read_csv(r'C:\Users\Gage\Desktop\archive (2)\marketing-data.csv')
+
+df.head()
+
+
+df.columns = list(map(lambda name:name.replace(' ','_'),df.columns))
+
+
+df[['zip_code', 'channel', 'offer']] = \
+    df[['zip_code', 'channel', 'offer']].astype('category')
+    
+
+df['zip_code']=df['zip_code'].cat.codes
+df['channel']=df['channel'].cat.codes
+df['offer']=df['offer'].cat.codes
+
+
+
+
+X,y = df.loc[:, df.columns != 'conversion'],df['conversion']
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+
+gbm = GradientBoostingClassifier(n_estimators=500)
+
+visualizer = ROCAUC(gbm, classes=[ "good", "bad"])
+visualizer.fit(X_train, y_train)        
+visualizer.score(X_test, y_test)        
+visualizer.show()      
+
+
+X_test['predicted_probability'] = gbm.predict_proba(X_test)[:,1] # Predicted Proba for bads(=1)
+X_test['Risk'] = y_test #Ground Truth
+X_test.head()
+
+#Sort the data in descending order of predicted probabilities.
+X_test = X_test.sort_values(by='predicted_probability', ascending=False)
+X_test.head()
+
+
+#Cut deciles based on the predicted probabilities
+X_test['decile_group'] = pd.qcut(X_test['predicted_probability'], 10)
+X_test.head()
+
+
+lift = X_test.groupby('decile_group').agg( #Group by Deciles of Predicted Probabilties
+[
+    'count', #The total number of customers(data points) in the decile
+    'sum', #The total number of bad customers(Risk=1)
+]
+)['Risk'].sort_index(ascending=False)
+lift.columns = ['Number of customers','Number of goods']
+lift['Cumulative goods'] = lift['Number of goods'].cumsum() #Cumulative Sum of the number of bads
+#Calculate Gain = Cumulative Percent of Events/Bads
+lift['Percent of Events'] = lift['Number of goods']/lift['Number of goods'].sum()*100
+lift['Gain'] = lift['Percent of Events'].cumsum() 
+#Calculate Lift = Ratio of Bads to the number of data points in the decile
+lift['Lift'] = lift['Gain']/np.array(range(10,100+10,10))
+lift.head(10)
+
+
+gain = lift.Gain.tolist()
+gain.insert(0,0)
+
+
+plt.plot(list(range(0,100+10,10)), gain, list(range(0,100+10,10)), list(range(0,100+10,10)), marker = 'o')
+plt.xlabel('% of Data')
+plt.ylabel('% of Gain')
+plt.show()
+
+
+
+plt.plot(list(range(10,110,10)), lift['Lift'], list(range(10,110,10)), np.repeat(1,10), marker = 'o')
+plt.xlabel('% of Data')
+plt.ylabel('Lift')
+plt.show()
+
